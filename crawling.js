@@ -5,144 +5,187 @@ import { load } from "cheerio";
 
 puppeteer.use(StealthPlugin());
 
-const getElementByXpath = (path) => {
-  return document.evaluate(
-    path,
-    document,
-    null,
-    XPathResult.FIRST_ORDERED_NODE_TYPE,
-    null
-  ).singleNodeValue;
-};
+async function setPage() {
+  try {
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        "--disable-gpu",
+        "--lang=ko_KR",
+        // 기타 옵션 추가
+      ],
+    });
 
-async function crawl() {
-  // 가상 브라우져를 실행, headless: false를 주면 벌어지는 일을 새로운 창을 열어 보여준다(default: true)
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      "--disable-gpu",
-      "--lang=ko_KR",
-      // 기타 옵션 추가
-    ],
-  });
+    const page = await browser.newPage();
 
-  const page = await browser.newPage();
-  const ndhs_id = "novten2018@gmail.com"; // 추후 로그인 폼에서 각자의 아이디 비밀번호를 입력받게 할 예정
-  const ndhs_pw = "misopia1!";
+    // await page.setUserAgent(
+    //   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36"
+    // );
 
-  // headless: false일때 브라우져 크기 지정해주는 코드
-  // await page.setViewport({
-  //     width: 1366,
-  //     height: 768
-  // });
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
+    );
 
-  // 사람처럼 보이게 하기
-  // 1. User-Agent 변경
-  // await page.setUserAgent(
-  //   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
-  // );
+    return { page, browser };
+  } catch (error) {
+    console.error("Error setting up page:", error);
+    throw error;
+  }
+}
 
-  // 2. 브라우저 엔진 변경
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36"
-  );
-
-  //쿠팡 로그인 페이지로 이동
+// 쿠팡 로그인
+async function login({ page, browser }) {
   await page.goto(
     "https://login.coupang.com/login/login.pang?rtnUrl=https%3A%2F%2Fwww.coupang.com%2Fnp%2Fpost%2Flogin%3Fr%3Dhttps%253A%252F%252Fwww.coupang.com%252F"
   );
-
-  // 3. 너무 빠르게 진행하지 않기 위해서 timeout 으로 딜레이 부여
-  // await new Promise((resolve) => setTimeout(resolve, 1000));
-
-  //아이디랑 비밀번호 란에 값을 넣어라
-  await page.evaluate(
-    (id, pw) => {
-      function getElementByXpath(path) {
-        return document.evaluate(
-          path,
-          document,
-          null,
-          XPathResult.FIRST_ORDERED_NODE_TYPE,
-          null
-        ).singleNodeValue;
-      }
-
-      // 아이디랑 비밀번호 란에 값을 넣어라
-      getElementByXpath('//*[@id="login-email-input"]').value = id;
-      getElementByXpath('//*[@id="login-password-input"]').value = pw;
-    },
-    ndhs_id,
-    ndhs_pw
-  );
-
-  //로그인 버튼을 클릭해라
+  const [loginEmailInput] = await page.$x('//*[@id="login-email-input"]');
+  const [loginPasswordInput] = await page.$x('//*[@id="login-password-input"]');
+  await loginEmailInput.type("g");
+  await loginPasswordInput.type("g");
   const [loginButton] = await page.$x(
     "/html/body/div[1]/div/div/form/div[5]/button"
   );
   await loginButton.click();
-
-  //로그인 화면이 전환될 때까지 기다려라, headless: false 일때는 필요 반대로 headless: true일때는 없어야 되는 코드
   await page.waitForNavigation();
+  const [mypageButton] = await page.$x(
+    '//*[@id="header"]/section/div/ul/li[1]/a'
+  );
+  if (!mypageButton) {
+    await browser.close();
+    throw new Error("로그인에 실패했습니다.");
+  }
+  return { page, browser };
+}
 
-  // 확인용 스크린샷. ( headless false 인 경우 접속이 안되어 headless 모드로 진입 )
-  // await page.screenshot({ path: "testresult.png", fullPage: true });
+// 쿠팡 구매목록 파싱
+function parseOrderItems(orderInfo) {
+  const result = [];
+  const $ = load(orderInfo.html());
 
-  // const myCoupangBtn = getElementByXpath(
-  //   '//*[@id="header"]/section/div/ul/li[1]/a'
-  // );
+  const itemElements = orderInfo
+    .children("div:nth-child(3)")
+    .find("div div div div:nth-child(2n)")
+    .find("div a:nth-child(2n)")
+    .toArray(); // 물품
 
-  // 로그인 성공 시(화면 전환 성공 시)
-  if (true) {
-    // 주문목록 페이지 이동
-    await page.goto("https://mc.coupang.com/ssr/desktop/order/list");
+  for (let i = 0; i < itemElements.length; i += 2) {
+    const name = $(itemElements[i]).text();
+    const price = $(itemElements[i + 1])
+      .find("div:nth-child(1) div > span:nth-child(1)")
+      .text();
+    const quantity = $(itemElements[i + 1])
+      .find("div:nth-child(1) div > span:nth-child(3)")
+      .text();
 
-    // 현재 페이지의 html정보를 로드
-    const content = await page.content();
-    const $ = load(content);
+    result.push({ name, price, quantity });
+  }
+  return result;
+}
 
-    // 주문목록 wrapper
-    const lists = $(
-      "#contents div div div:nth-child(3) > div:nth-child(3) > div > div:nth-child(4)"
-    );
+// 쿠팡 주문일자 파싱
+const convToDate = (dateString) => {
+  const dateRegex = /(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})/;
+  const match = dateString.match(dateRegex);
 
-    const items = lists.children("div").toArray();
-    for (const item of items) {
-      const goods = $(item).children("div").toArray();
+  if (match) {
+    const year = match[1];
+    const month = match[2].padStart(2, "0");
+    const day = match[3];
 
-      // 상품 정보가 없으면 pass
-      if (goods.length === 0) continue;
+    return `${year}${month}${day}`;
+  }
+};
 
-      // 상품정보가 있는 경우
-      for (const a of goods) {
-        const $A01 = $(a).children("div:nth-child(1)");
-        const $A02 = $(a).children("table");
+// 주문건의 uid 생성
+function generateUID() {
+  const date = new Date();
+  const year = date.getFullYear().toString();
+  const month = (date.getMonth() + 1).toString().padStart(2, "0");
+  const day = date.getDate().toString().padStart(2, "0");
+  const time = date.getTime().toString();
+  const random = Math.floor(Math.random() * 100000)
+    .toString()
+    .padStart(5, "0");
+  return `${year}${month}${day}${time}${random}`;
+}
 
-        if ($A01) $A01.text();
-        if ($A02) {
-          const info = $A02
-            .children("tbody")
-            .children("tr")
-            .children("td:nth-child(1)")
-            .children("div")
-            .text();
+// 쿠팡 주문내역 페이지 크롤링
+async function crawl({ page, browser }) {
+  // 주문목록 페이지 이동
+  await page.goto("https://mc.coupang.com/ssr/desktop/order/list");
 
-          // 텍스트를 줄 단위로 나눔
-          const lines = info.split("\n");
-          console.log(lines);
-        }
+  // 주문목록 확인
+  const [orderListTitle] = await page.$x(
+    '//*[@id="__next"]/div[2]/div[2]/div/div[1]'
+  );
+
+  // 주문목록이 확인
+  if (!orderListTitle) {
+    // 확인용 스크린샷. ( headless false 인 경우 접속이 안되어 headless 모드로 진입 )
+    // await page.screenshot({ path: "testresult.png", fullPage: true });
+    console.log("실패");
+    // 브라우저 종료
+    await browser.close();
+  }
+
+  // 현재 페이지의 html정보를 로드
+  const content = await page.content();
+  const $ = load(content);
+
+  // 주문목록 wrapper
+  const orderListWrapper = $(
+    "#contents div div div:nth-child(3) > div:nth-child(3) > div > div:nth-child(4)"
+  );
+
+  // 주문 정보 parsing
+  const orders = orderListWrapper.children("div").toArray();
+
+  const result = [];
+  for (const order of orders) {
+    const itemArr = [];
+    const goodsArr = [];
+    const goodsList = $(order).children("div").toArray();
+
+    // 상품 정보가 없으면 pass
+    if (goodsList.length === 0) continue;
+
+    // 상품정보가 있는 경우
+    for (const goods of goodsList) {
+      const orderDateTxt =
+        $(goods).children("div:nth-child(1)").text() ?? "none order date";
+      const orderDate = convToDate(orderDateTxt);
+      const uid = generateUID();
+      if (orderDate) itemArr.push({ uid, orderDate });
+
+      const orderInfo = $(goods)
+        .children("table")
+        .children("tbody")
+        .children("tr")
+        .children("td:nth-child(1)");
+
+      if (orderInfo) {
+        if (orderInfo.toArray().length === 0) continue;
+        const orderStatus = orderInfo.children("div:nth-child(1)").text(); // 배송상태
+        const goodsInfo = parseOrderItems(orderInfo); // 물품 정보
+
+        goodsArr.push({ orderStatus, goodsInfo });
       }
     }
-  }
-  //로그인 실패시
-  else {
-    console.log("실패");
-    ndhs_id = "nope";
-    ndhs_pw = "nope";
+
+    itemArr.push(goodsArr);
+    result.push(itemArr);
   }
 
-  // //브라우저 꺼라
+  // 파싱 결과
+  console.log(JSON.stringify(result));
+
+  // 브라우저 종료
   await browser.close();
 }
 
-crawl();
+// 쿠팡 크롤링 실행
+(async () => {
+  const page = await setPage();
+  await login(page);
+  await crawl(page);
+})();
